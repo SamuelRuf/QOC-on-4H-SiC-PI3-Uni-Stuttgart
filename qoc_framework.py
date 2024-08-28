@@ -1,23 +1,14 @@
 import matplotlib.pyplot as plt
 import numpy as np
-from IPython.display import Image
 import qutip as qt
-import pandas as pa
 import os
-import matplotlib as mpl
 import itertools
-from matplotlib import cm
 import time
 from quocslib.utils.inputoutput import readjson
-from quocslib.utils.inputoutput import writejsonfile
 from quocslib.Optimizer import Optimizer
 from quocslib.utils.AbstractFoM import AbstractFoM
-from matplotlib.colors import LogNorm
 from matplotlib.colors import SymLogNorm
-import matplotlib.ticker as ticker
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from scipy.interpolate import interp1d
-from scipy.interpolate import CubicSpline
 
 # set a parameter to see animations in line
 from matplotlib import rc
@@ -87,6 +78,7 @@ class Hamiltonian():
         - theta: The polar angle of the magnetic field.
         - phi: The azimuthal angle of the magnetic field.
         - spins: A dict of Spin objects.
+        - diagonal_detuning: A boolean indicating whether to consider diagonal detuning (default is False).
 
         Returns:
         None
@@ -107,6 +99,14 @@ class Hamiltonian():
     def calc_base_hamiltonian(self, rwa=False):
         """
         Calculate the base Hamiltonian.
+        This method calculates the total Hamiltonian by summing up the contributions from different terms.
+        The terms included in the calculation are:
+        - Zero field splitting Hamiltonian
+        - Zeeman splitting Hamiltonian
+        - Nuclear coupling Hamiltonian
+
+        Args:
+        - rwa (bool): Whether to consider the rotating wave approximation (default: False)
 
         Returns:
         The total Hamiltonian.
@@ -120,6 +120,7 @@ class Hamiltonian():
     def calc_zero_field_splitting_hamiltonian(self):
         """
         Calculate the zero field splitting Hamiltonian.
+        This method calculates the zero field splitting Hamiltonian based on the electron's spin and spin projection.
 
         Returns:
         The zero field splitting Hamiltonian.
@@ -129,6 +130,55 @@ class Hamiltonian():
         H_zero_field = self.D * (sz_e**2 - 1/3 * s * (s + 1))
         H_zero_field = self.embed_hamiltonian(H_zero_field, 0)
         return H_zero_field
+        
+    def calc_zemann_splitting_hamiltonian(self):
+        """
+        Calculate the Zeeman splitting Hamiltonian.
+
+        Returns:
+        The Zeeman splitting Hamiltonian.
+        """
+        H = 0
+        for spin in self.spins:
+            zemann_splitting = self.spins[spin].gamma * self.B * (np.sin(self.theta) * np.cos(self.phi) * self.spins[spin].sx + np.sin(self.theta) * np.sin(self.phi) * self.spins[spin].sy + np.cos(self.theta) * self.spins[spin].sz)
+            zemann_splitting = self.embed_hamiltonian(zemann_splitting, self.spins[spin].order_in_system)
+            H += zemann_splitting
+        return H
+    
+    def calc_nuclear_coupling_hamiltonian(self, rwa=False):
+        """
+        Calculate the nuclear coupling Hamiltonian using the coupling tensors.
+
+        Args:
+        - rwa (bool): Whether to consider the rotating wave approximation. If true sets all couplings except Azz to 0. (default: False)
+
+        Returns:
+        The nuclear coupling Hamiltonian.
+        """
+        H = 0
+        for spin in self.spins:
+            for other_spin in self.spins[spin].coupling_tensors:
+                #if rwa is True, every coupling is made 0 except for the Azz coupling
+                if rwa:
+                    if self.diagonal_detuning:
+                        A = self.spins[spin].coupling_tensors[other_spin]*[[1,0,0],[0,1,0],[0,0,1]]
+                    else:
+                        A = self.spins[spin].coupling_tensors[other_spin]*[[0,0,0],[0,0,0],[0,0,1]]
+                else:
+                    A = self.spins[spin].coupling_tensors[other_spin]
+                # The dot prod makes Axx*Ix + Axy*Iy + Axz*Iz 
+                AxI = np.dot(A[0], self.spins[other_spin].spin_operator)
+                AyI = np.dot(A[1], self.spins[other_spin].spin_operator)
+                AzI = np.dot(A[2], self.spins[other_spin].spin_operator)
+                # insert sx, sy, sz with the ix, iy, iz at the right position
+                order_spin = self.spins[spin].order_in_system
+                order_other_spin = self.spins[other_spin].order_in_system
+                SxAxI_op = [self.spins[spin].sx if self.spins[i].order_in_system == order_spin else AxI if self.spins[i].order_in_system == order_other_spin else qt.qeye(self.spins[i].dim) for i in self.spins]
+                SyAyI_op = [self.spins[spin].sy if self.spins[i].order_in_system == order_spin else AyI if self.spins[i].order_in_system == order_other_spin else qt.qeye(self.spins[i].dim) for i in self.spins]
+                SzAzI_op = [self.spins[spin].sz if self.spins[i].order_in_system == order_spin else AzI if self.spins[i].order_in_system == order_other_spin else qt.qeye(self.spins[i].dim) for i in self.spins]
+                H += qt.tensor(SxAxI_op) + qt.tensor(SyAyI_op) + qt.tensor(SzAzI_op)
+
+        return H
     
     def embed_hamiltonian(self, H, spin_index):
         """
@@ -145,23 +195,34 @@ class Hamiltonian():
         operators = [qt.qeye(self.spins[spin].dim) if self.spins[spin].order_in_system != spin_index else H for spin in self.spins]
         return qt.tensor(operators)
     
-    def calc_zemann_splitting_hamiltonian(self):
+    def calc_hamiltonian(self, t, B1=0, omega=0, phi=0, RWA=False):
         """
-        Calculate the Zeeman splitting Hamiltonian.
+        Calculate the total Hamiltonian.
+
+        Parameters:
+        - B1: The microwave field strength.
+        - omega: The microwave frequency.
+        - phi: The microwave phase.
+        - t: The time.
+        - RWA: Whether to use the rotating wave approximation.
 
         Returns:
-        The Zeeman splitting Hamiltonian.
+        The total Hamiltonian.
         """
-        H = 0
-        for spin in self.spins:
-            zemann_splitting = self.spins[spin].gamma * self.B * (np.sin(self.theta) * np.cos(self.phi) * self.spins[spin].sx + np.sin(self.theta) * np.sin(self.phi) * self.spins[spin].sy + np.cos(self.theta) * self.spins[spin].sz)
-            zemann_splitting = self.embed_hamiltonian(zemann_splitting, self.spins[spin].order_in_system)
-            H += zemann_splitting
+        if RWA:
+            H = self.base_hamiltonian_rwa.copy()
+        else:
+            H = self.base_hamiltonian.copy()
+        if B1 != 0:
+            if not RWA:
+                H += self.calc_microwave_hamiltonian(t, B1, omega, phi)
+            if RWA:
+                H += self.calc_microwave_hamiltonian_RWA(B1, omega, phi)
         return H
     
     def calc_microwave_hamiltonian(self, t, B1, omega, phi=0, mw_theta=np.pi/2, mw_phi=0):
         """
-        Calculate the microwave Hamiltonian.
+        Calculate the microwave Hamiltonian for different microwave amplitudes.
 
         Parameters:
         - t: The time.
@@ -191,7 +252,7 @@ class Hamiltonian():
     
     def microwave_hamiltonian(self, t, omega, phi=0, mw_theta=np.pi/2, mw_phi=0):
         """
-        Calculate the microwave Hamiltonian.
+        Calculate the microwave Hamiltonian normalized to a microwave amplitude of 1.
 
         Parameters:
         - B1: The microwave field strength.
@@ -225,13 +286,7 @@ class Hamiltonian():
         Returns:
         The microwave Hamiltonian using the rotating wave approximation.
         """
-        # Might need a times 2 pi after the omega
         H = 0
-        # make a dictory with only the first spin from the self.spins dict
-        # if self.diagonal_detuning:
-        #     spins = self.spins
-        # else:
-        #     spins = list(self.spins.keys())[:1]
         spins = self.spins
         for spin in spins:
             microwave = +omega * self.spins[spin].sz + self.spins[spin].gamma * (B1/2) * (np.cos(phi) * self.spins[spin].sx + np.sin(phi) * self.spins[spin].sy)
@@ -245,14 +300,10 @@ class Hamiltonian():
         Calculate the control Hamiltonian using the rotating wave approximation.
 
         Parameters:
-        - B1: The microwave field strength.
-        - omega: The microwave frequency.
         - phi: The microwave phase.
-        - mw_theta: The polar angle of the microwave field.
-        - mw_phi: The azimuthal angle of the microwave field.
 
         Returns:
-        The microwave Hamiltonian using the rotating wave approximation.
+        The control Hamiltonian using the rotating wave approximation.
         """
         H = 0
         spins = self.spins
@@ -264,6 +315,15 @@ class Hamiltonian():
         return H
     
     def drift_hamiltonian_rwa(self, omega):
+        """
+        Calculate the drift Hamiltonian using the rotating wave approximation.
+
+        Parameters:
+        - omega: The microwave frequency.
+
+        Returns:
+        The control Hamiltonian using the rotating wave approximation.
+        """
         H = self.base_hamiltonian_rwa.copy()
         for spin in self.spins:
             detuning = omega * self.spins[spin].sz
@@ -272,68 +332,26 @@ class Hamiltonian():
         return H
     
     def control_hamiltonian(self, t, omega):
+        """
+        Calculate the control Hamiltonian excactly.
+
+        Parameters:
+        - t: The time.
+        - omega: The microwave frequency.
+
+        Returns:
+        The control Hamiltonian.
+        """
         return self.microwave_hamiltonian(t, omega)
 
     def drift_hamiltonian(self):
+        """
+        Calculate the drift Hamiltonian excactly.
+
+        Returns:
+        The control Hamiltonian using the rotating wave approximation.
+        """
         return self.base_hamiltonian.copy()
-    
-    def calc_hamiltonian(self, t, B1=0, omega=0, phi=0, RWA=False):
-        """
-        Calculate the total Hamiltonian.
-
-        Parameters:
-        - B1: The microwave field strength.
-        - omega: The microwave frequency.
-        - phi: The microwave phase.
-        - t: The time.
-        - RWA: Whether to use the rotating wave approximation.
-
-        Returns:
-        The total Hamiltonian.
-        """
-        if RWA:
-            H = self.base_hamiltonian_rwa.copy()
-        else:
-            H = self.base_hamiltonian.copy()
-        if B1 != 0:
-            if not RWA:
-                H += self.calc_microwave_hamiltonian(t, B1, omega, phi)
-            if RWA:
-                H += self.calc_microwave_hamiltonian_RWA(B1, omega, phi)
-        return H
-
-
-    def calc_nuclear_coupling_hamiltonian(self, rwa=False):
-        """
-        Calculate the nuclear coupling Hamiltonian using the coupling tensors.
-
-        Returns:
-        The nuclear coupling Hamiltonian.
-        """
-        H = 0
-        for spin in self.spins:
-            for other_spin in self.spins[spin].coupling_tensors:
-                #if rwa is True, every coupling is made 0 except for the Azz coupling
-                if rwa:
-                    if self.diagonal_detuning:
-                        A = self.spins[spin].coupling_tensors[other_spin]*[[1,0,0],[0,1,0],[0,0,1]]
-                    else:
-                        A = self.spins[spin].coupling_tensors[other_spin]*[[0,0,0],[0,0,0],[0,0,1]]
-                else:
-                    A = self.spins[spin].coupling_tensors[other_spin]
-                # The dot prod makes Axx*Ix + Axy*Iy + Axz*Iz 
-                AxI = np.dot(A[0], self.spins[other_spin].spin_operator)
-                AyI = np.dot(A[1], self.spins[other_spin].spin_operator)
-                AzI = np.dot(A[2], self.spins[other_spin].spin_operator)
-                # insert sx, sy, sz with the ix, iy, iz at the right position
-                order_spin = self.spins[spin].order_in_system
-                order_other_spin = self.spins[other_spin].order_in_system
-                SxAxI_op = [self.spins[spin].sx if self.spins[i].order_in_system == order_spin else AxI if self.spins[i].order_in_system == order_other_spin else qt.qeye(self.spins[i].dim) for i in self.spins]
-                SyAyI_op = [self.spins[spin].sy if self.spins[i].order_in_system == order_spin else AyI if self.spins[i].order_in_system == order_other_spin else qt.qeye(self.spins[i].dim) for i in self.spins]
-                SzAzI_op = [self.spins[spin].sz if self.spins[i].order_in_system == order_spin else AzI if self.spins[i].order_in_system == order_other_spin else qt.qeye(self.spins[i].dim) for i in self.spins]
-                H += qt.tensor(SxAxI_op) + qt.tensor(SyAyI_op) + qt.tensor(SzAzI_op)
-
-        return H
     
     def get_state(self, state_number):
         """
@@ -346,16 +364,6 @@ class Hamiltonian():
         The state of the system.
         """
         dims = self.H.dims[0]
-        # if state_number == -1:
-        #     n = self.H.shape[0]
-        #     probabilities = np.asarray(range(n))/np.sum(range(n))
-        #     return_state = 0
-        #     for i,probability in enumerate(probabilities):
-        #         if probability == 0:
-        #             continue
-        #         return_state += np.sqrt(probability) * self.get_state(i)
-        # else:
-        #     return_state = qt.basis(dims, list(np.unravel_index(state_number,dims)))
         return_state = qt.basis(dims, list(np.unravel_index(state_number,dims)))  
         return return_state
 
@@ -383,7 +391,7 @@ class Hamiltonian():
     
     def get_expectation_from_density_matrix(self, density_matrix):
         """
-        Get the state from the density matrix.
+        Get the expectation value for the pure states, from the density matrix.
 
         Parameters:
         - density_matrix: The density matrix of the state.
@@ -518,7 +526,9 @@ class Simulator():
         - phi: The microwave phase.
         - c_ops: The collapse operators.
         - RWA: Whether to use the rotating wave approximation. This works only for electron transitions.
-
+        - progress_bar: The type of progress bar to use.
+        - nsteps: The number of steps in the simulation.
+        
         Returns:
         The result of the simulation.
         """
@@ -583,6 +593,9 @@ class Simulator():
 
         Parameters:
         - result: The result of the simulation.
+        - states: The states to analyse.
+        - sim_mw: Whether to simulate the microwave field.
+        - RWA: Whether to use the rotating wave approximation.
 
         Returns:
         None
@@ -599,14 +612,15 @@ class Simulator():
         expectation_values = []
         states_to_plot = range(self.hamiltonian.H.shape[0]) if states is None else states
         for i in states_to_plot:
-            expectation_values.append(qt.expect(self.hamiltonian.get_state_dm(i), result))
-            plt.plot(self.tlist, expectation_values[-1], label=legend_label.format(states=state_labels[i]))
+            expectation_values.append(qt.expect(self.hamiltonian.get_state_dm(len(states_to_plot)-i-1), result))
+            plt.plot(self.tlist, expectation_values[-1], label=legend_label.format(states=state_labels[len(states_to_plot)-i-1]))
         if sim_mw:
             plt.plot(self.tlist, self.B1 * np.cos(self.omega * self.tlist * 2 * np.pi + self.phi), label="Microwave field")
-        plt.xlabel(r'Time $t$ [\SI{}{\micro\second}]', fontsize=14)
-        plt.ylabel(r'Expectation values', fontsize=14)
+        plt.xlabel(r'Time $t$ [\SI{}{\micro\second}]', fontsize=28)
+        plt.ylabel(r'Expectation values', fontsize=28)
+        ax.tick_params(axis='both', which='major', labelsize=14)
         plt.grid()
-        plt.legend(loc='upper center')
+        plt.legend(loc='upper right', fontsize=14)
         #plt.savefig("SlideMW.png", format="png", bbox_inches="tight", dpi=300)
         #plt.show()
     
@@ -630,11 +644,16 @@ class Simulator():
                     state_strings.append(str(int(state)))
                 else:
                     numerator = int(state * 2)
-                    state_strings.append(f"{numerator}/2")
+                    sign = "+" if numerator >= 0 else "-"
+                    if latex:
+                        state_strings.append(sign + r"\frac{" + str(np.abs(numerator)) + "}{2}")
+                    else:
+                        state_strings.append(f"{numerator}/2")
             dim_states.append(state_strings)
         combinations = list(itertools.product(*dim_states))
         if latex:
-            state_labels = [r"$\ket{" + r"}_{^\mathrm{e}}\otimes\ket{".join(combination) + r"}_{^{29}\mathrm{Si}}$" for combination in combinations]
+            #state_labels = [r"$\ket{" + r"}_{^\mathrm{e}}\otimes\ket{".join(combination) + r"}_{^{29}\mathrm{Si}}$" for combination in combinations]
+            state_labels = [r"$\ket{" + r", ".join(combination) + "}$" for combination in combinations]
         else:
             state_labels = [r"|" + r" ".join(combination) + r">" for combination in combinations]
         return state_labels
@@ -697,7 +716,6 @@ class SiC(AbstractFoM):
         res = self.optimization.simulator.simulate(B1=B1_pulse, omega=self.optimization.H.transitions['|-3/2 -1/2> -> |-1/2 -1/2>'], phi=0, RWA=self.RWA, progress_bar="", t_end=self.dur, nsteps=self.optimization.nsteps)
         return [result.full() for result in res]
     
-    
     def get_FoM(self, pulses: list = [], parameters: list = [], timegrids: list = []) -> dict:
         """
         Compute and return the figure of merit
@@ -730,7 +748,8 @@ class Optimization():
         Initialize an optimizer object.
 
         Parameters:
-        None
+        - H: The Hamiltonian of the system.
+        - direction: The direction of the optimization. (default: "minimization")
 
         Returns:
         None
@@ -751,14 +770,20 @@ class Optimization():
     def fidelity_func(self, B1_pulse, dur, RWA=False, optimize_det=True, optimize_rabi_error=True,
                       optimize_mw_noise=False, mw_averages=4, optimize_mw_length=False) -> float:
         """
-        Calculate the fidelity of the system.
+        Calculate the FoM of the system.
 
         Parameters:
-        - phi_f: The final density matrix.
-        - phi_t: The target density matrix.
-
+        - B1_pulse: The microwave pulse.
+        - dur: The duration of the pulse.
+        - RWA: Whether to use the rotating wave approximation.
+        - optimize_det: Whether to optimize the detuning.
+        - optimize_rabi_error: Whether to optimize the Rabi error.
+        - optimize_mw_noise: Whether to optimize the microwave noise.
+        - mw_averages: The number of averages for the microwave noise.
+        - optimize_mw_length: Whether to optimize the microwave length.
+        
         Returns:
-        The fidelity of the system.
+        The FoM of the system.
         """
         if RWA:
             transition = self.H.transitions_rwa['|-3/2 -1/2> -> |-1/2 -1/2>']
@@ -840,6 +865,7 @@ class Optimization():
         Parameters:
         - phi_f: The final density matrix.
         - phi_t: The target density matrix.
+        - compare_target_states: Whether to compare the target states.
 
         Returns:
         The state fidelity of the system.
@@ -863,7 +889,7 @@ class Optimization():
 
         Parameters:
         - H: The Hamiltonian of the system.
-        - order: The order of the spins.
+        - order: The order of the states after the gate.
 
         Returns:
         The CNOT gate.
@@ -940,12 +966,28 @@ class Optimization():
                  initial_guess=None, optimize_det=True, optimize_rabi_error=True, optimize_mw_noise=False, mw_averages=4,
                  optimize_parameters=True, grape=False, optimize_mw_length=False):
         """
-        Optimize the system.
+        Optimize the pulse.
 
         Parameters:
+        - max_eval_total: The maximum number of evaluations.
+        - RWA: Whether to use the rotating wave approximation.
+        - cbs_funct_evals: The number of evaluations for the change based stopping criteria.
+        - basis_vector_number: The number of basis vectors.
+        - basis_upper_limit: The upper limit of the basis frequencies in MHz.
+        - dur: The duration of the pulse.
+        - nsteps: The number of steps in the simulation.
+        - bins_number: The number of bins in the pulse.
+        - initial_guess: The initial guess of the pulse.
+        - optimize_det: Whether to optimize the detuning.
+        - optimize_rabi_error: Whether to optimize the Rabi error.
+        - optimize_mw_noise: Whether to optimize the microwave noise.
+        - mw_averages: The number of averages for the microwave noise.
+        - optimize_mw_length: Whether to optimize the microwave pulse length.
+        - optimize_parameters: Whether to optimize the parameters.
+        - grape: Whether to use GRAPE optimization.
 
         Returns:
-        The result of the optimization.
+        The resulting pulse of the optimization.
         """
         pulses_list = []
         self.dur = dur
@@ -976,8 +1018,6 @@ class Optimization():
             self.optimization_dictionary["pulses"][0]["amplitude_variation"] = 0.3
             #self.optimization_dictionary["pulses"][0]["basis"]  = {"basis_name": "PiecewiseBasis"}
 
-
-
         optimization_obj = Optimizer(self.optimization_dictionary, self.FoM_object)
         self.results_path = optimization_obj.results_path
         self.FoM_object.set_save_path(self.results_path)
@@ -987,12 +1027,10 @@ class Optimization():
         print(f"Execution time: {end_time-start_time} seconds")
         self.FoM_object.save_FoM()
 
-        
         self.opt_alg_obj = optimization_obj.get_optimization_algorithm()
         self.opt_controls =self.opt_alg_obj.get_best_controls()
         self.fomlist = self.opt_alg_obj.FoM_list
 
-        # it contains the pulses and time grids under certain keys as a dictionary
         pulse, timegrid = self.opt_controls["pulses"][0], self.opt_controls["timegrids"][0]
         
         np.savetxt(os.path.join(self.results_path, 'bestControls.txt'), [pulse, timegrid])
@@ -1003,14 +1041,26 @@ class Optimization():
         else: 
             return pulse, timegrid
     
-    def optimize_initial_guess(self, max_eval_total=1000, 
-                               RWA=False, cbs_funct_evals= 500, basis_vector_number=10, 
-                               basis_upper_limit=2.0, dur=0.3, nsteps=10000, bins_number=200, 
-                               initial_guess=None, initial_guess_function=None, initial_guess_parameters=None,
+    def optimize_initial_guess(self, max_eval_total=1000, RWA=False, dur=0.3, nsteps=10000, initial_guess_function=None, initial_guess_parameters=None,
                                optimize_det=True, optimize_rabi_error=True, optimize_mw_noise=False, mw_averages=4, optimize_mw_length=False):
         """
-        Optimize the initial guess of the system.
+        Optimize the initial guess for the pulse.
 
+        Parameters:
+        - max_eval_total: The maximum number of evaluations.
+        - RWA: Whether to use the rotating wave approximation.
+        - dur: The duration of the pulse.
+        - nsteps: The number of steps in the simulation.
+        - optimize_det: Whether to optimize the detuning.
+        - optimize_rabi_error: Whether to optimize the Rabi error.
+        - optimize_mw_noise: Whether to optimize the microwave noise.
+        - mw_averages: The number of averages for the microwave noise.
+        - optimize_mw_length: Whether to optimize the microwave pulse length.
+        - initial_guess_function: The initial guess function.
+        - initial_guess_parameters: The initial guess parameters.
+
+        Returns:
+        The resulting pulse of the optimization.
         """
         self.mw_averages = mw_averages
         pulses_list = []
@@ -1057,7 +1107,6 @@ class Optimization():
         print(f"Execution time: {end_time-start_time} seconds")
         self.FoM_object.save_FoM()
 
-        
         self.opt_alg_obj = optimization_obj.get_optimization_algorithm()
         self.opt_controls =self.opt_alg_obj.get_best_controls()
         self.fomlist = self.opt_alg_obj.FoM_list
@@ -1082,7 +1131,7 @@ class Optimization():
         plt.ylabel(r'Amplitude $B$ [\SI{}{\gauss}]', fontsize=14)
         plt.legend()
         plt.savefig(os.path.join(self.results_path,"Pulse.pdf"), format="pdf", bbox_inches="tight")
-
+        
         return params
 
     def analyse_optimization(self, initial_guess_function=False, initial_guess_params=None):
@@ -1275,7 +1324,6 @@ class Optimization():
         vmin = fidelities_2d.min()
         vmax = fidelities_2d.max()
 
-        #generate logarithmic ticks
         tick_locations=([0.5,0.97,0.98,0.99,0.999] )
         # Plot the heatmap using pcolormesh
         fig, ax = plt.subplots(figsize=(11, 7))
@@ -1610,3 +1658,12 @@ class Optimization():
             # Copy the current pulse value
             new_pulse[i] = pulse[old_index]
         return new_pulse, new_timegrid
+
+
+            
+    
+    
+
+
+        
+
