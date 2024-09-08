@@ -10,6 +10,10 @@ from quocslib.utils.AbstractFoM import AbstractFoM
 from matplotlib.colors import SymLogNorm
 from scipy.interpolate import interp1d
 
+mittelblau = (0/255, 81/255, 158/255)
+hellblau = (0/255, 190/255, 255/255)
+anthrazit = (62/255, 68/255, 76/255)
+
 # set a parameter to see animations in line
 from matplotlib import rc
 rc('animation', html='jshtml')
@@ -113,7 +117,7 @@ class Hamiltonian():
         """
         H = 0
         H += self.calc_zero_field_splitting_hamiltonian()
-        H += self.calc_zemann_splitting_hamiltonian()
+        H += self.calc_zeeman_splitting_hamiltonian()
         H += self.calc_nuclear_coupling_hamiltonian(rwa=rwa) 
         return H
     
@@ -131,7 +135,7 @@ class Hamiltonian():
         H_zero_field = self.embed_hamiltonian(H_zero_field, 0)
         return H_zero_field
         
-    def calc_zemann_splitting_hamiltonian(self):
+    def calc_zeeman_splitting_hamiltonian(self):
         """
         Calculate the Zeeman splitting Hamiltonian.
 
@@ -140,9 +144,9 @@ class Hamiltonian():
         """
         H = 0
         for spin in self.spins:
-            zemann_splitting = self.spins[spin].gamma * self.B * (np.sin(self.theta) * np.cos(self.phi) * self.spins[spin].sx + np.sin(self.theta) * np.sin(self.phi) * self.spins[spin].sy + np.cos(self.theta) * self.spins[spin].sz)
-            zemann_splitting = self.embed_hamiltonian(zemann_splitting, self.spins[spin].order_in_system)
-            H += zemann_splitting
+            zeeman_splitting = self.spins[spin].gamma * self.B * (np.sin(self.theta) * np.cos(self.phi) * self.spins[spin].sx + np.sin(self.theta) * np.sin(self.phi) * self.spins[spin].sy + np.cos(self.theta) * self.spins[spin].sz)
+            zeeman_splitting = self.embed_hamiltonian(zeeman_splitting, self.spins[spin].order_in_system)
+            H += zeeman_splitting
         return H
     
     def calc_nuclear_coupling_hamiltonian(self, rwa=False):
@@ -587,7 +591,7 @@ class Simulator():
             result = qt.mesolve(self.hamiltonian.H*2*np.pi, self.psi0, self.tlist, self.c_ops, [], options=options_dict).states
         return result
     
-    def analyse(self, result, states=None, sim_mw=False, RWA=False):
+    def analyse(self, result, states=None, sim_mw=False, legend=True, multiple=False): 
         """
         Analyse the result of the simulation.
 
@@ -605,8 +609,11 @@ class Simulator():
         plt.rcParams['font.family'] = ['serif']
         #plt.figure(figsize=(10,5))
         # Plot the expactation values of a all the pure states
-        fig = plt.figure(figsize=(11, 7))
-        ax = fig.add_subplot(111)
+        if not multiple:
+            fig = plt.figure(figsize=(11, 7))
+            ax = fig.add_subplot(111)
+        else:
+            ax = plt.gca()
         legend_label = r"{states}"
         state_labels = Simulator.generate_state_labels(self.hamiltonian.H.dims[0])
         expectation_values = []
@@ -620,7 +627,8 @@ class Simulator():
         plt.ylabel(r'Expectation values', fontsize=28)
         ax.tick_params(axis='both', which='major', labelsize=14)
         plt.grid()
-        plt.legend(loc='upper right', fontsize=14)
+        if legend: 
+            plt.legend(loc='upper right', fontsize=14)
         #plt.savefig("SlideMW.png", format="png", bbox_inches="tight", dpi=300)
         #plt.show()
     
@@ -1146,6 +1154,7 @@ class Optimization():
         plt.rcParams['text.usetex'] = True  # to use LaTeX in figures
         plt.rcParams["text.latex.preamble"]= r'\usepackage[utf8]{inputenc}\usepackage[T1]{fontenc}\usepackage{lmodern, mathpazo}\inputencoding{utf8}\usepackage{amsmath}\usepackage{amssymb}\usepackage{dsfont}\usepackage{mathtools}\usepackage{physics}\usepackage{siunitx}\DeclareSIUnit\gauss{G}'
         plt.rcParams['font.family'] = ['serif']
+        
         print("Plotting the FoM")
 
         fig = plt.figure(figsize=(11, 7))
@@ -1362,7 +1371,7 @@ class Optimization():
         #plt.show()
 
     def analyze_pulse(self, pulse1, pulse2=None, timegrid=None, dur=0.3, path="", save=False, 
-                      simulator=None, H=None, analyze=[True, True, True, True, True, True]):
+                      simulator=None, H=None, analyze=[True, True, True, True, True, True, True, True]):
         """
         Analyse the pulse.
 
@@ -1397,43 +1406,57 @@ class Optimization():
         if analyze[1]:
             print("Simulating the pulses")
             # Simulate and plot expectation values for Pulse 1
+            states_to_plot = range(H.H.shape[0])
+            states_to_plot = [0,1,2,3]
             B1_pulse1 = [pulse1, timegrid]
             result1 = simulator.simulate(B1=B1_pulse1, omega=H.transitions['|-3/2 -1/2> -> |-1/2 -1/2>'], phi=0, RWA=False, progress_bar="enhanced", t_end=dur)
-            expectation_values1 = [qt.expect(H.get_state_dm(i), result1) for i in range(H.H.shape[0])]
+            expectation_values1 = [qt.expect(H.get_state_dm(i), result1) for i in states_to_plot]
 
             if pulse2:
                 # Simulate and plot expectation values for Pulse 2
                 B1_pulse2 = [pulse2, timegrid]
                 result2 = simulator.simulate(B1=B1_pulse2, omega=H.transitions['|-3/2 -1/2> -> |-1/2 -1/2>'], phi=0, RWA=False, progress_bar="enhanced", t_end=dur)
-                expectation_values2 = [qt.expect(H.get_state_dm(i), result2) for i in range(H.H.shape[0])]
+                expectation_values2 = [qt.expect(H.get_state_dm(i), result2) for i in states_to_plot]
                 fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(22, 7), sharey=True)
             else:
                 fig, ax1 = plt.figure(figsize=(11, 7))
             #plt.subplots_adjust(bottom=0.15, top=0.9, right=0.98, left=0.1)
-            ax1.set_xlabel(r'Time $t$ [\SI{}{\micro\second}]', fontsize=22)
-            ax1.set_ylabel(r'Expectation values', fontsize=22)
+            ax1.set_xlabel(r'Time $t$ [\SI{}{\micro\second}]', fontsize=28)
+            ax1.set_ylabel(r'Expectation values', fontsize=28)
             state_labels = Simulator.generate_state_labels(H.H.dims[0])
-            for i in range(H.H.shape[0]):
-                ax1.plot(simulator.tlist, expectation_values1[i], label=f'{state_labels[i]}')
+            artists1 = []
+            artists2 = []
+            color_list = [mittelblau, hellblau, '#1e9c89', anthrazit] 
+            for i in states_to_plot:
+                # artist, = ax1.plot(simulator.tlist, expectation_values1[i], label=f'{state_labels[i]}', color=color_list[i])
+                artist, = ax1.plot(simulator.tlist, expectation_values1[i], label=f'{state_labels[i]}')
+                artists1.append(artist)
                 if pulse2:
-                    ax2.plot(simulator.tlist, expectation_values2[i], linestyle='--', label=f'{state_labels[i]}')
+                    #artist2, =ax2.plot(simulator.tlist, expectation_values2[i], linestyle='--', label=f'{state_labels[i]}', color=color_list[i])
+                    artist2, =ax2.plot(simulator.tlist, expectation_values2[i], linestyle='--', label=f'{state_labels[i]}')
+                    artists2.append(artist2)
             
             if pulse2:
-                ax2.set_xlabel(r'Time $t$ [\SI{}{\micro\second}]', fontsize=22)
+                ax2.set_xlabel(r'Time $t$ [\SI{}{\micro\second}]', fontsize=28)
                 ax2.grid(True, which="both")
-                ax2.legend(loc='upper left',fontsize=14)
+                ax2.set_title(r"Square Pulse", fontsize=28)
+                ax2.legend(handles=artists1+artists2, loc='upper right', bbox_to_anchor=(0.04,1),fontsize=18)
             ax1.grid(True, which="both")
-            ax1.legend(loc='upper left',fontsize=14)
+            ax1.legend(handles=artists1+artists2, loc='upper left', bbox_to_anchor=(0.96,1),fontsize=18)
+            ax1.set_title(r"Optimized Pulse", fontsize=28)
+            ax2.tick_params(axis='both', which='major', labelsize=18)
+            ax1.tick_params(axis='both', which='major', labelsize=18)  # You can adjust the size value
             if save:
                 plt.savefig(os.path.join(path,"SimulationComparison.pdf"), format="pdf", bbox_inches="tight")
 
         if analyze[2]:
             print("Analyzing the detuning stability")
-            detunings = np.linspace(-15,15,100)
+            detunings = np.linspace(-15,15,200)
             fidelities1 = []
+            start_time_det = time.time()
             if pulse2:
                 fidelities2 = []
-            for det in detunings:
+            for i,det in enumerate(detunings):
                 res1 = simulator.simulate(B1=[pulse1,timegrid], omega=self.H.transitions['|-3/2 -1/2> -> |-1/2 -1/2>']+det, phi=0, RWA=False, progress_bar="", t_end=dur)
                 U_f1 = res1[-1]
                 fidelities1.append(1-self.state_fidelity(U_f1,self.U_t))
@@ -1442,15 +1465,19 @@ class Optimization():
                     res2 = simulator.simulate(B1=[pulse2,timegrid], omega=self.H.transitions['|-3/2 -1/2> -> |-1/2 -1/2>']+det, phi=0, RWA=False, progress_bar="", t_end=dur)
                     U_f2 = res2[-1]
                     fidelities2.append(1-self.state_fidelity(U_f2,self.U_t))
+                print(f"{i+1}/{len(detunings)}:{time.time()-start_time_det} s. Remaining time: {(time.time()-start_time_det)*(len(detunings)-i-1)/(i+1)} s")
             fig = plt.figure(figsize=(11, 7))
             ax = fig.add_subplot(111)
-            plt.plot(detunings, fidelities1, linewidth=1.5, zorder=10, label=r"Optimized Pulse")
+            plt.plot(detunings, fidelities1, linewidth=1.5, zorder=10, label=r"Optimized Pulse", color=mittelblau)
             if pulse2:
-                plt.plot(detunings, fidelities2, linewidth=1.5, zorder=10, label=r"Square Pulse")
+                plt.plot(detunings, fidelities2, linewidth=1.5, zorder=10, label=r"Square Pulse", color=hellblau)
+            x_barrier = 8.61564484e+00 / 2
+            ax.axvline(x=x_barrier, color=anthrazit, linestyle='--', linewidth=1.5, label=r"$A_{zz}/2$")
             plt.grid(True, which="both")
-            plt.xlabel(r'Detuning $\Delta\omega$ [$\SI{}{\mega\hertz}$]', fontsize=22)
-            plt.ylabel(r'FoM [a.u.]', fontsize=22)
-            plt.legend(fontsize=14)
+            plt.xlabel(r'Detuning $\Delta\omega$ [$\SI{}{\mega\hertz}$]', fontsize=28)
+            plt.ylabel(r'Fidelity', fontsize=28)
+            plt.tick_params(axis='both', which='major', labelsize=18)  # You can adjust the size value
+            plt.legend(fontsize=18)
             if save:
                 plt.savefig(os.path.join(path,"DetuningStability.pdf"), format="pdf", bbox_inches="tight")
                 np.savetxt(os.path.join(path, 'DetuningStability1_data.txt'), [detunings,fidelities1])
@@ -1459,10 +1486,11 @@ class Optimization():
         
         if analyze[3]:
             print("Analyzing the Rabi Error stability")
-            rabiErrors = np.linspace(-1, 1, 50)
+            rabiErrors = np.linspace(-1, 1, 200)
             fidelities1 = []
             if pulse2:
                 fidelities2 = []
+            start_time_rabi = time.time()
             for i, rE in enumerate(rabiErrors):
                 B1_pulse1_rabi_amplitudes = np.array(pulse1) * (1 + rE)
                 B1_pulse1_rabi = [B1_pulse1_rabi_amplitudes.tolist(), timegrid]
@@ -1478,27 +1506,114 @@ class Optimization():
                     res2 = simulator.simulate(B1=B1_pulse2_rabi, omega=H.transitions['|-3/2 -1/2> -> |-1/2 -1/2>'], phi=0, RWA=False, progress_bar="", t_end=dur)
                     U_f2 = res2[-1] 
                     fidelities2.append(1-self.state_fidelity(U_f2, self.U_t))
+                print(f"{i+1}/{len(rabiErrors)}:{time.time()-start_time_rabi} s. Remaining time: {(time.time()-start_time_rabi)*(len(rabiErrors)-i-1)/(i+1)} s")
 
             fig = plt.figure(figsize=(11, 7))
             ax = fig.add_subplot(111)
-            plt.plot(rabiErrors, fidelities1, linewidth=1.5, zorder=10, label=r"Optimized Pulse")
+            plt.plot(rabiErrors, fidelities1, linewidth=1.5, zorder=10, label=r"Optimized Pulse", color=mittelblau)
             if pulse2:
-                plt.plot(rabiErrors, fidelities2, linewidth=1.5, zorder=10, label=r"Square Pulse")
+                plt.plot(rabiErrors, fidelities2, linewidth=1.5, zorder=10, label=r"Square Pulse", color=hellblau)
             plt.grid(True, which="both")
-            plt.xlabel(r'Rabi Error [$B^{-1}_\mathrm{mw}$]', fontsize=22)
-            plt.ylabel(r'FoM [a.u.]', fontsize=22)
-            plt.legend(fontsize=14)
+            plt.xlabel(r'Rabi Error [$B^{-1}_\mathrm{mw}$]', fontsize=28)
+            plt.ylabel(r'Fidelity', fontsize=28)
+            plt.tick_params(axis='both', which='major', labelsize=18)  # You can adjust the size value
+            plt.legend(fontsize=18, loc='lower center')
             if save:
                 plt.savefig(os.path.join(path,"RabiStability.pdf"), format="pdf", bbox_inches="tight")
                 np.savetxt(os.path.join(path, 'RabiStability1_data.txt'), [rabiErrors,fidelities1])
                 if pulse2:
                     np.savetxt(os.path.join(path, 'RabiStability2_data.txt'), [rabiErrors,fidelities2])
 
+        if analyze[6]:
+            print("Analyzing the Duration Error stability")
+            durErrors = np.linspace(-1, 1, 200)
+            fidelities1 = []
+            if pulse2:
+                fidelities2 = []
+            start_time_dur = time.time()
+            for i, dE in enumerate(durErrors):
+                B1_pulse1_dur_timegrid = np.array(timegrid) * (1 + dE) 
+                B1_pulse1_dur = [pulse1, B1_pulse1_dur_timegrid]
+                
+                res1 = simulator.simulate(B1=B1_pulse1_dur, omega=H.transitions['|-3/2 -1/2> -> |-1/2 -1/2>'], phi=0, RWA=False, progress_bar="", t_end=dur*(1 + dE))
+                U_f1 = res1[-1]
+                fidelities1.append(1-self.state_fidelity(U_f1, self.U_t))
+                
+                if pulse2:
+                    B1_pulse2_dur_timegrid = np.array(timegrid) * (1 + dE)
+                    B1_pulse2_dur = [pulse2, B1_pulse2_dur_timegrid]
+                    
+                    res2 = simulator.simulate(B1=B1_pulse2_dur, omega=H.transitions['|-3/2 -1/2> -> |-1/2 -1/2>'], phi=0, RWA=False, progress_bar="", t_end=dur*(1 + dE))
+                    U_f2 = res2[-1] 
+                    fidelities2.append(1-self.state_fidelity(U_f2, self.U_t))
+                print(f"{i+1}/{len(durErrors)}:{time.time()-start_time_dur} s. Remaining time: {(time.time()-start_time_dur)*(len(durErrors)-i-1)/(i+1)} s")
+           
+            fig = plt.figure(figsize=(11, 7))
+            ax = fig.add_subplot(111)
+            plt.plot(durErrors, fidelities1, linewidth=1.5, zorder=10, label=r"Optimized Pulse", color=mittelblau)
+            if pulse2:
+                plt.plot(durErrors, fidelities2, linewidth=1.5, zorder=10, label=r"Square Pulse", color=hellblau)
+            plt.grid(True, which="both")
+            plt.xlabel(r'Duration Error [$t^{-1}_\mathrm{dur}$]', fontsize=28)
+            plt.ylabel(r'Fidelity', fontsize=28)
+            plt.tick_params(axis='both', which='major', labelsize=18)  # You can adjust the size value
+            plt.legend(fontsize=18, loc='lower center')
+            if save:
+                plt.savefig(os.path.join(path,"DurStability.pdf"), format="pdf", bbox_inches="tight")
+                np.savetxt(os.path.join(path, 'DurStability1_data.txt'), [durErrors,fidelities1])
+                if pulse2:
+                    np.savetxt(os.path.join(path, 'DurStability2_data.txt'), [durErrors,fidelities2])
+        
+        if analyze[7]:
+            print("Analyzing the Microwave Noise stability")
+            number_of_averages = 10
+            microwave_noise_levels = np.linspace(0, 0.5, 300)
+            fidelities1 = []
+            if pulse2:
+                fidelities2 = []
+            start_time_noise = time.time()
+            for i, nE in enumerate(microwave_noise_levels):
+                f_i1 = 0
+                if pulse2:
+                    f_i2 = 0
+                for j in range(number_of_averages):
+                    B1_pulse1_noise = [(np.array(pulse1) + np.random.normal(0, nE, len(pulse1))).tolist(), timegrid]
+                    res1 = simulator.simulate(B1=B1_pulse1_noise, omega=H.transitions['|-3/2 -1/2> -> |-1/2 -1/2>'], phi=0, RWA=False, progress_bar="", t_end=dur)
+                    U_f1 = res1[-1]
+                    f_i1 += (1-self.state_fidelity(U_f1, self.U_t))
+                    
+                    if pulse2:
+                        B1_pulse2_noise = [(np.array(pulse2) + np.random.normal(0, nE, len(pulse2))).tolist(), timegrid]
+                        
+                        res2 = simulator.simulate(B1=B1_pulse2_noise, omega=H.transitions['|-3/2 -1/2> -> |-1/2 -1/2>'], phi=0, RWA=False, progress_bar="", t_end=dur)
+                        U_f2 = res2[-1] 
+                        
+                        f_i2 += (1-self.state_fidelity(U_f2, self.U_t))
+                fidelities1.append(f_i1/number_of_averages)
+                fidelities2.append(f_i2/number_of_averages)
+                print(f"{i+1}/{len(microwave_noise_levels)}:{time.time()-start_time_noise} s. Remaining time: {(time.time()-start_time_noise)*(len(microwave_noise_levels)-i-1)/(i+1)} s")
+           
+            fig = plt.figure(figsize=(11, 7))
+            ax = fig.add_subplot(111)
+            plt.plot(microwave_noise_levels, fidelities1, linewidth=1.5, zorder=10, label=r"Optimized Pulse", color=mittelblau)
+            if pulse2:
+                plt.plot(microwave_noise_levels, fidelities2, linewidth=1.5, zorder=10, label=r"Square Pulse", color=hellblau)
+            plt.grid(True, which="both")
+            plt.xlabel(r'Standard deviation $\sigma$ [$\SI{}{\mathrm{G}}$]', fontsize=28)
+            plt.ylabel(r'Fidelity', fontsize=28)
+            plt.tick_params(axis='both', which='major', labelsize=18)  # You can adjust the size value
+            plt.legend(fontsize=18, loc='lower center')
+            if save:
+                plt.savefig(os.path.join(path,f"NoiseStability{number_of_averages}averages.pdf"), format="pdf", bbox_inches="tight")
+                np.savetxt(os.path.join(path, 'NoiseStability1_data.txt'), [microwave_noise_levels,fidelities1])
+                if pulse2:
+                    np.savetxt(os.path.join(path, 'NoiseStability2_data.txt'), [microwave_noise_levels,fidelities2])
+           
         if analyze[4]:
             print("Analyzing 2D stability")
             # simulate 2d with rabi errors for both pulses
-            detunings = np.linspace(-5, 5, 30)
-            rabiErrors = np.linspace(-0.5, 0.5, 30)
+            detunings = np.linspace(-5, 5, 45)
+            rabiErrors = np.linspace(-0.5, 0.5, 45)
             start_time_2d = time.time()
             fidelities_2d_1 = np.zeros((len(rabiErrors), len(detunings)))
             if pulse2:
@@ -1528,7 +1643,7 @@ class Optimization():
                 vmax = max(fidelities_2d_1.max(), fidelities_2d_2.max())
 
                 #generate logarithmic ticks
-                tick_locations=([0.46,0.66,0.86, 0.96,0.97,0.98,0.99,0.999] )
+                tick_locations=([0.36,0.56,0.76, 0.96,0.97,0.98,0.99,0.999] )
 
                 # Plot the heatmaps side by side
                 fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(22, 7), sharey=True)
@@ -1536,14 +1651,14 @@ class Optimization():
                 fig, ax1 = plt.subplots(1, 1, figsize=(11, 7))
 
             cax1 = ax1.pcolormesh(detunings, rabiErrors, fidelities_2d_1, shading='auto', cmap='viridis', norm=SymLogNorm(linscale=0.01,linthresh=0.96,vmin=vmin, vmax=vmax, base=10))
-            ax1.set_xlabel(r'Detuning $\Delta\omega$ [$\SI{}{\mega\hertz}$]', fontsize=22)
-            ax1.set_ylabel(r'Rabi Error [$B^{-1}_\mathrm{mw}$]', fontsize=22)
+            ax1.set_xlabel(r'Detuning $\Delta\omega$ [$\SI{}{\mega\hertz}$]', fontsize=28)
+            ax1.set_ylabel(r'Rabi Error [$B^{-1}_\mathrm{mw}$]', fontsize=28)
             #ax1.set_title(r'Fidelity Heatmap for Pulse 1', fontsize=16)
             #ax1.grid(True, which="both")
             
             if pulse2:
                 cax2 = ax2.pcolormesh(detunings, rabiErrors, fidelities_2d_2, shading='auto', cmap='viridis', norm=SymLogNorm(linscale=0.01,linthresh=0.96,vmin=vmin, vmax=vmax, base=10))
-                ax2.set_xlabel(r'Detuning $\Delta\omega$ [$\SI{}{\mega\hertz}$]', fontsize=22)
+                ax2.set_xlabel(r'Detuning $\Delta\omega$ [$\SI{}{\mega\hertz}$]', fontsize=28)
                 #ax2.set_title(r'Fidelity Heatmap for Pulse 2', fontsize=16)
                 #ax2.grid(True, which="both")
 
@@ -1551,7 +1666,10 @@ class Optimization():
                 cbar = fig.colorbar(cax2, ax=(ax1,ax2),ticks=tick_locations)
             else:
                 cbar = fig.colorbar(cax1,ticks=tick_locations)
-            cbar.set_label('Fidelity', fontsize=22)
+            cbar.set_label(r'Fidelity', fontsize=28)
+            ax1.tick_params(axis='both', which='major', labelsize=18) 
+            ax2.tick_params(axis='both', which='major', labelsize=18)  
+            cbar.ax.tick_params(axis='both', which='major', labelsize=18)  
 
             if save:
                 plt.savefig(os.path.join(path, "FidelityHeatmapComparison.pdf"), format="pdf", bbox_inches="tight")
@@ -1576,13 +1694,14 @@ class Optimization():
 
             fig = plt.figure(figsize=(11, 7))
             ax = fig.add_subplot(111)
-            plt.plot(pulse_ft_freq1, pulse_ft_ampl1, label=r'Optimized Pulse')
+            plt.plot(pulse_ft_freq1, pulse_ft_ampl1, label=r'Optimized Pulse', color=mittelblau)
             if pulse2:
-                plt.plot(pulse_ft_freq2, pulse_ft_ampl2, label=r'Square Pulse', linestyle='--')
-            plt.xlabel(r'Frequency $f$ [\SI{}{\mega\hertz}]', fontsize=22)
-            plt.ylabel(r'Amplitude', fontsize=22)
+                plt.plot(pulse_ft_freq2, pulse_ft_ampl2, label=r'Square Pulse', color=hellblau)
+            plt.xlabel(r'Frequency $f$ [\SI{}{\mega\hertz}]', fontsize=28)
+            plt.ylabel(r'Amplitude [a.U.]', fontsize=28)
             plt.xlim(0,10)
-            plt.legend(fontsize=14)
+            plt.legend(fontsize=18)
+            plt.tick_params(axis='both', which='major', labelsize=18)  # You can adjust the size value
             plt.grid(True)
             if save:
                 plt.savefig(os.path.join(path,"FourierTransformPulseComparison.pdf"), format="pdf", bbox_inches="tight")
@@ -1591,6 +1710,17 @@ class Optimization():
         plt.show()
 
     def read_pulse_data(self,folder_name):
+        """
+        Read pulse data from files in the specified folder.
+        
+        Parameters:
+        - folder_name (str): The path to the folder containing the pulse data files.
+        
+        Returns:
+        - pulse (ndarray): An array of floats representing the pulse data.
+        - timegrid (ndarray): An array of floats representing the time grid.
+        - dur (float): The duration of the pulse.
+        """
         # Define file paths
         best_controls_path = os.path.join(folder_name, "bestControls.txt")
         best_params_path = os.path.join(folder_name, "bestParams.txt")
@@ -1613,6 +1743,19 @@ class Optimization():
         return pulse, timegrid, dur
     
     def transmission_pulse(self,pulse, timegrid, frequencies, transmissions, cutoff_freq=500):
+        """
+        Reconstructs a pulse signal by applying transmission correction in the frequency domain.
+        
+        Parameters:
+            pulse (array-like): The input pulse signal.
+            timegrid (array-like): The time grid of the pulse signal.
+            frequencies (array-like): The frequencies corresponding to the transmission data.
+            transmissions (array-like): The transmission values corresponding to the frequencies.
+            cutoff_freq (float, optional): The cutoff frequency for transmission correction. Frequencies above this value will be set to 1.0. Defaults to 500.
+        
+        Returns:
+            array-like: The reconstructed pulse signal after applying transmission correction.
+        """
         ft_pulse = np.concatenate([np.zeros(10000*len(pulse)), pulse, np.zeros(10000*len(pulse))])
         ft_timegrid = np.linspace(-10000*timegrid[-1], 10001*timegrid[-1], len(ft_pulse))
 
@@ -1640,6 +1783,18 @@ class Optimization():
         return reconstructed_pulse
     
     def adjust_sampling_rate(self, pulse, timegrid, sampling_rate=12e3):
+        """
+        Adjust the sampling rate of a pulse signal by interpolating the pulse values.
+
+        Parameters:
+        - pulse (ndarray): The pulse signal.
+        - timegrid (ndarray): The time grid of the pulse signal.
+        - sampling_rate (float): The desired sampling rate.
+
+        Returns:
+        - ndarray: The new pulse signal with the adjusted sampling rate.
+        - ndarray: The new time grid with the adjusted sampling rate.
+        """
         duration = timegrid[-1]  # Total duration (in microseconds)
         num_samples = int(sampling_rate * duration)  # Number of samples for the new array
 
